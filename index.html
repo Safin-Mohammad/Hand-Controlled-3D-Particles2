@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hand-Controlled 3D Solar System</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000000; font-family: 'Segoe UI', sans-serif; }
+        #canvas-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; }
+        #ui-panel {
+            position: absolute; top: 20px; right: 20px; z-index: 10;
+            background: rgba(10, 10, 20, 0.85); backdrop-filter: blur(10px);
+            padding: 20px; border-radius: 16px; border: 1px solid rgba(255,255,255,0.1);
+            color: white; width: 220px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        }
+        h2 { margin: 0 0 15px 0; font-size: 18px; letter-spacing: 1px; text-transform: uppercase; color: #ffaa00; }
+        .control-group { margin-bottom: 15px; }
+        label { display: block; font-size: 12px; margin-bottom: 5px; color: #888; }
+        select {
+            width: 100%; padding: 8px; border-radius: 6px; border: none;
+            background: rgba(255,255,255,0.1); color: white; outline: none;
+        }
+        .status { margin-top: 15px; font-size: 12px; color: #00ff88; display: flex; align-items: center; gap: 8px;}
+        .dot { width: 8px; height: 8px; background: #00ff88; border-radius: 50%; box-shadow: 0 0 10px #00ff88; }
+        #loading {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            color: white; font-size: 24px; z-index: 20; pointer-events: none;
+            text-shadow: 0 0 20px rgba(255,255,255,0.5);
+        }
+        #hand-control-display {
+            height: 10px; background: rgba(255,255,255,0.1); border-radius: 5px; margin-top: 10px;
+        }
+        #hand-control-bar {
+            height: 100%; width: 50%; background: linear-gradient(90deg, #ff4444, #00ff88);
+            border-radius: 5px; transition: width 0.1s ease-out;
+        }
+        
+        /* Mini Camera View for debugging/feedback */
+        #video-container {
+            position: absolute; bottom: 20px; left: 20px; width: 240px; height: 180px;
+            z-index: 2; border-radius: 12px; overflow: hidden; opacity: 0.2;
+            box-shadow: 0 0 20px rgba(0,0,0,0.5); border: 2px solid rgba(255,255,255,0.1);
+        }
+        video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+</head>
+<body>
+
+    <div id="loading">Initializing AI Vision...</div>
+
+    <div id="ui-panel">
+        <h2>Solar System Control</h2>
+        
+        <div class="control-group">
+            <label>Planetary Style</label>
+            <select id="template-select">
+                <option value="default">Standard Planets</option>
+                <option value="nebula">Nebula Cloud</option>
+                <option value="fire">Fiery Comet</option>
+            </select>
+        </div>
+        
+        <div class="status">
+            <div class="dot"></div>
+            <span id="hand-status">Waiting for hands...</span>
+        </div>
+        
+        <label style="margin-top: 10px;">Hand Tension (Speed/Scale)</label>
+        <div id="hand-control-display"><div id="hand-control-bar"></div></div>
+    </div>
+
+    <div id="video-container">
+        <video id="input-video"></video>
+    </div>
+    <div id="canvas-container"></div>
+
+<script>
+    // --- Configuration ---
+    const SUN_PARTICLES = 3000;
+    const PLANET_PARTICLES = 1000;
+    const PARTICLE_SIZE = 0.05;
+
+    // --- Planet Data (Simplified Astronomical Units) ---
+    const PLANET_DATA = [
+        // Name, Color (Hex), Orbit Radius, Orbit Speed (Relative), Particle Count, Size
+        { name: "Sun", color: 0xffa500, radius: 0, orbitR: 0, speed: 0, particles: SUN_PARTICLES, size: 2.5 },
+        { name: "Mercury", color: 0xcccccc, radius: 0.39, orbitR: 5, speed: 4.1, particles: PLANET_PARTICLES, size: 0.2 },
+        { name: "Venus", color: 0xdd8800, radius: 0.72, orbitR: 8, speed: 1.6, particles: PLANET_PARTICLES, size: 0.3 },
+        { name: "Earth", color: 0x0077ff, radius: 1.0, orbitR: 12, speed: 1.0, particles: PLANET_PARTICLES, size: 0.35 },
+        { name: "Mars", color: 0xff3300, radius: 1.52, orbitR: 18, speed: 0.53, particles: PLANET_PARTICLES, size: 0.25 },
+        { name: "Jupiter", color: 0xeebb99, radius: 5.2, orbitR: 25, speed: 0.08, particles: PLANET_PARTICLES * 2, size: 1.5 },
+        { name: "Saturn", color: 0xddeebb, radius: 9.5, orbitR: 35, speed: 0.03, particles: PLANET_PARTICLES * 2, size: 1.2 }
+        // Uranus and Neptune are omitted for simplicity and scale, but can be added similarly
+    ];
+
+    // --- State ---
+    let handTension = 0.5; // 0 = closed (slow/contract), 1 = open (fast/expand)
+    let planets = [];
+    let currentStyle = 'default';
+
+    // --- Three.js Setup ---
+    const container = document.getElementById('canvas-container');
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.FogExp2(0x000000, 0.015);
+
+    const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.set(0, 30, 60);
+    camera.lookAt(0, 0, 0);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    container.appendChild(renderer.domElement);
+
+    // Light for atmosphere
+    const ambientLight = new THREE.AmbientLight(0x404040, 5); // soft white light
+    scene.add(ambientLight);
+
+    // --- Particle Generators ---
+
+    // Generates a spherical particle cloud
+    function generateSphereParticles(count, radius, color, style) {
+        const geometry = new THREE.BufferGeometry();
+        const positions = new Float32Array(count * 3);
+        const colors = new Float32Array(count * 3);
+        const centerColor = new THREE.Color(color);
+
+        for (let i = 0; i < count; i++) {
+            const i3 = i * 3;
+            
+            // Random point in a sphere (for planet volume)
+            const r = Math.cbrt(Math.random()) * radius;
+            const theta = Math.random() * Math.PI * 2;
+            const phi = Math.acos(2 * Math.random() - 1);
+
+            positions[i3] = r * Math.sin(phi) * Math.cos(theta);
+            positions[i3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+            positions[i3 + 2] = r * Math.cos(phi);
+            
+            // Color fading based on style
+            if (style === 'fire') {
+                centerColor.set(0xff4400).lerp(new THREE.Color(0xffffff), Math.random() * 0.5);
+            } else if (style === 'nebula') {
+                centerColor.set(color).lerp(new THREE.Color(0x00ffff), Math.random() * 0.5);
+            }
+
+            colors[i3] = centerColor.r;
+            colors[i3 + 1] = centerColor.g;
+            colors[i3 + 2] = centerColor.b;
+        }
+
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+        const material = new THREE.PointsMaterial({
+            size: PARTICLE_SIZE,
+            vertexColors: true,
+            transparent: true,
+            opacity: 0.9,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false
+        });
+
+        const points = new THREE.Points(geometry, material);
+        return points;
+    }
+
+    // --- Solar System Initialization ---
+    function createSolarSystem(style) {
+        // Clear previous system
+        planets.forEach(p => scene.remove(p.mesh));
+        planets = [];
+
+        PLANET_DATA.forEach(data => {
+            const particleMesh = generateSphereParticles(
+                data.particles, 
+                data.size, 
+                data.color, 
+                style
+            );
+            
+            // Orbit visual (optional, can be added with THREE.Line)
+            
+            const planetObject = {
+                name: data.name,
+                mesh: particleMesh,
+                orbitRadius: data.orbitR,
+                orbitalSpeed: data.speed,
+                rotationSpeed: data.speed * 5,
+                startTime: Math.random() * 2 * Math.PI, // Random start angle
+                initialColor: new THREE.Color(data.color)
+            };
+            
+            scene.add(particleMesh);
+            planets.push(planetObject);
+        });
+    }
+    
+    // Initial system creation
+    createSolarSystem(currentStyle);
+
+    // --- Interaction Logic (MediaPipe) ---
+    const videoElement = document.getElementById('input-video');
+    const hands = new Hands({locateFile: (file) => {
+        return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+    }});
+
+    hands.setOptions({
+        maxNumHands: 1, // Focusing on single hand for simplicity
+        modelComplexity: 1,
+        minDetectionConfidence: 0.7,
+        minTrackingConfidence: 0.5
+    });
+
+    hands.onResults(onResults);
+
+    function onResults(results) {
+        const handStatus = document.getElementById('hand-status');
+        const dot = document.querySelector('.dot');
+        const controlBar = document.getElementById('hand-control-bar');
+
+        if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+            document.getElementById('loading').style.display = 'none';
+            handStatus.innerText = "Hand Detected";
+            dot.style.background = "#00ff88";
+
+            const landmarks = results.multiHandLandmarks[0];
+            
+            // Calculate openness (Tension) based on distance between Thumb Tip (4) and Pinky Tip (20)
+            const thumbTip = landmarks[4];
+            const pinkyTip = landmarks[20];
+            
+            const d = Math.hypot(thumbTip.x - pinkyTip.x, thumbTip.y - pinkyTip.y, thumbTip.z - pinkyTip.z);
+            
+            // Simple normalization based on typical min/max distance (0.05 to 0.4)
+            let openness = (d - 0.05) / (0.4 - 0.05); 
+            openness = Math.max(0, Math.min(1, openness)); // Clamp between 0 (fist) and 1 (open)
+            
+            // Smoothly update state
+            handTension = THREE.MathUtils.lerp(handTension, openness, 0.2);
+
+        } else {
+            handStatus.innerText = "Show hand to control";
+            dot.style.background = "#ff4444";
+            // Slowly revert to neutral speed (0.5) if hands lost
+            handTension = THREE.MathUtils.lerp(handTension, 0.5, 0.05);
+        }
+        
+        // Update UI bar
+        controlBar.style.width = `${handTension * 100}%`;
+    }
+
+    // Camera Setup
+    const cam = new Camera(videoElement, {
+        onFrame: async () => {
+            await hands.send({image: videoElement});
+        },
+        width: 640,
+        height: 480
+    });
+    cam.start();
+
+    // --- UI Events ---
+    document.getElementById('template-select').addEventListener('change', (e) => {
+        currentStyle = e.target.value;
+        createSolarSystem(currentStyle);
+    });
+
+    // --- Animation Loop ---
+    const clock = new THREE.Clock();
+
+    function animate() {
+        requestAnimationFrame(animate);
+
+        const time = clock.getElapsedTime();
+        
+        // 1. Hand Control to System Speed and Scale
+        
+        // Hand Tension (0 to 1) maps to:
+        // Closed (0) -> Slow speed (0.1), Zoom In (Scale 0.7)
+        // Open (1) -> Fast speed (2.0), Zoom Out (Scale 1.5)
+        
+        const systemSpeed = THREE.MathUtils.lerp(0.1, 2.0, handTension);
+        const systemScale = THREE.MathUtils.lerp(0.7, 1.5, handTension);
+
+        // 2. Animate Planets
+        planets.forEach(planet => {
+            const mesh = planet.mesh;
+            
+            // Orbit Position
+            const angle = planet.startTime + time * planet.orbitalSpeed * systemSpeed;
+            const radius = planet.orbitRadius * planet.orbitRadius * systemScale; // Quadratic scaling helps visual separation
+            
+            mesh.position.x = Math.cos(angle) * radius;
+            mesh.position.z = Math.sin(angle) * radius;
+            
+            // Planet Rotation (Self)
+            mesh.rotation.y += planet.rotationSpeed * 0.01 * systemSpeed;
+            
+            // Dynamic Color/Scale Feedback (e.g., Sun pulses when tension is high)
+            if (planet.name === 'Sun') {
+                const material = mesh.material;
+                // Brightness/Scale based on hand tension
+                const pulse = 1 + Math.sin(time * 5) * 0.05 * handTension;
+                mesh.scale.setScalar(pulse); 
+                
+                material.opacity = THREE.MathUtils.lerp(0.6, 1.0, handTension);
+            }
+        });
+
+        // Camera control: Slight spin and zoom out
+        camera.position.x = Math.sin(time * 0.05) * 60;
+        camera.position.z = Math.cos(time * 0.05) * 60;
+        
+        // Camera distance adjustment based on control
+        camera.position.y = THREE.MathUtils.lerp(20, 40, handTension);
+        camera.lookAt(0, 0, 0);
+
+        renderer.render(scene, camera);
+    }
+
+    animate();
+
+    // Handle Resize
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+</script>
+</body>
+  </html>
+  
