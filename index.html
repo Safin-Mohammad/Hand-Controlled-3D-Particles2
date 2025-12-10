@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Hand-Controlled 3D Solar System</title>
+    <title>Advanced Galactic Hand-Controlled Simulation</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: #000000; font-family: 'Segoe UI', sans-serif; }
         #canvas-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; }
@@ -11,39 +11,32 @@
             position: absolute; top: 20px; right: 20px; z-index: 10;
             background: rgba(10, 10, 20, 0.85); backdrop-filter: blur(10px);
             padding: 20px; border-radius: 16px; border: 1px solid rgba(255,255,255,0.1);
-            color: white; width: 220px;
+            color: white; width: 260px;
             box-shadow: 0 10px 30px rgba(0,0,0,0.5);
         }
-        h2 { margin: 0 0 15px 0; font-size: 18px; letter-spacing: 1px; text-transform: uppercase; color: #ffaa00; }
-        .control-group { margin-bottom: 15px; }
-        label { display: block; font-size: 12px; margin-bottom: 5px; color: #888; }
-        select {
-            width: 100%; padding: 8px; border-radius: 6px; border: none;
-            background: rgba(255,255,255,0.1); color: white; outline: none;
-        }
+        h2 { margin: 0 0 15px 0; font-size: 18px; letter-spacing: 1px; text-transform: uppercase; color: #00ffff; }
         .status { margin-top: 15px; font-size: 12px; color: #00ff88; display: flex; align-items: center; gap: 8px;}
         .dot { width: 8px; height: 8px; background: #00ff88; border-radius: 50%; box-shadow: 0 0 10px #00ff88; }
+        #hand-control-display {
+            height: 10px; background: rgba(255,255,255,0.1); border-radius: 5px; margin-top: 10px;
+        }
+        #hand-control-bar {
+            height: 100%; width: 50%; background: linear-gradient(90deg, #ff00ff, #00ffff);
+            border-radius: 5px; transition: width 0.1s ease-out;
+        }
+        .mode-text { font-size: 14px; margin-top: 10px; color: #00ffff; }
+        
         #loading {
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
             color: white; font-size: 24px; z-index: 20; pointer-events: none;
             text-shadow: 0 0 20px rgba(255,255,255,0.5);
         }
-        #hand-control-display {
-            height: 10px; background: rgba(255,255,255,0.1); border-radius: 5px; margin-top: 10px;
-        }
-        #hand-control-bar {
-            height: 100%; width: 50%; background: linear-gradient(90deg, #ff4444, #00ff88);
-            border-radius: 5px; transition: width 0.1s ease-out;
-        }
-        
-        /* Mini Camera View for debugging/feedback */
         #video-container {
             position: absolute; bottom: 20px; left: 20px; width: 240px; height: 180px;
             z-index: 2; border-radius: 12px; overflow: hidden; opacity: 0.2;
             box-shadow: 0 0 20px rgba(0,0,0,0.5); border: 2px solid rgba(255,255,255,0.1);
         }
         video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
-
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
@@ -51,27 +44,20 @@
 </head>
 <body>
 
-    <div id="loading">Initializing AI Vision...</div>
+    <div id="loading">Initializing Advanced Vision System...</div>
 
     <div id="ui-panel">
-        <h2>Solar System Control</h2>
-        
-        <div class="control-group">
-            <label>Planetary Style</label>
-            <select id="template-select">
-                <option value="default">Standard Planets</option>
-                <option value="nebula">Nebula Cloud</option>
-                <option value="fire">Fiery Comet</option>
-            </select>
-        </div>
+        <h2>Galactic Control Center</h2>
         
         <div class="status">
             <div class="dot"></div>
             <span id="hand-status">Waiting for hands...</span>
         </div>
         
-        <label style="margin-top: 10px;">Hand Tension (Speed/Scale)</label>
+        <label style="margin-top: 10px;">Hand Tension (Zoom/Speed)</label>
         <div id="hand-control-display"><div id="hand-control-bar"></div></div>
+        
+        <div class="mode-text">Current Mode: <span id="mode-display">Solar System (Contracted)</span></div>
     </div>
 
     <div id="video-container">
@@ -79,37 +65,66 @@
     </div>
     <div id="canvas-container"></div>
 
+<script id="vertexshader" type="x-shader/x-vertex">
+    uniform float size;
+    uniform float scale;
+    attribute vec3 customColor;
+    attribute float particleLifetime;
+    varying vec3 vColor;
+    
+    void main() {
+        vColor = customColor;
+        vec4 mvPosition = modelViewMatrix * vec4( position, 1.0 );
+        gl_PointSize = size * ( 1.0 / - mvPosition.z );
+        gl_Position = projectionMatrix * mvPosition;
+    }
+</script>
+
+<script id="fragmentshader" type="x-shader/x-fragment">
+    uniform vec3 color;
+    varying vec3 vColor;
+
+    void main() {
+        float r = 0.0, strength = 0.0;
+        // Simple circular particle with soft edge
+        r = distance(gl_PointCoord, vec2(0.5, 0.5));
+        strength = 1.0 - smoothstep(0.4, 0.5, r);
+        
+        gl_FragColor = vec4( vColor, strength );
+    }
+</script>
+
 <script>
     // --- Configuration ---
-    const SUN_PARTICLES = 3000;
-    const PLANET_PARTICLES = 1000;
-    const PARTICLE_SIZE = 0.05;
+    const TOTAL_PLANET_PARTICLES = 1500;
+    const GALAXY_PARTICLES = 50000; // High count for convincing galaxy
+    const BASE_PARTICLE_SIZE = 0.8;
 
-    // --- Planet Data (Simplified Astronomical Units) ---
+    // --- Planet Data (Including Moons) ---
     const PLANET_DATA = [
-        // Name, Color (Hex), Orbit Radius, Orbit Speed (Relative), Particle Count, Size
-        { name: "Sun", color: 0xffa500, radius: 0, orbitR: 0, speed: 0, particles: SUN_PARTICLES, size: 2.5 },
-        { name: "Mercury", color: 0xcccccc, radius: 0.39, orbitR: 5, speed: 4.1, particles: PLANET_PARTICLES, size: 0.2 },
-        { name: "Venus", color: 0xdd8800, radius: 0.72, orbitR: 8, speed: 1.6, particles: PLANET_PARTICLES, size: 0.3 },
-        { name: "Earth", color: 0x0077ff, radius: 1.0, orbitR: 12, speed: 1.0, particles: PLANET_PARTICLES, size: 0.35 },
-        { name: "Mars", color: 0xff3300, radius: 1.52, orbitR: 18, speed: 0.53, particles: PLANET_PARTICLES, size: 0.25 },
-        { name: "Jupiter", color: 0xeebb99, radius: 5.2, orbitR: 25, speed: 0.08, particles: PLANET_PARTICLES * 2, size: 1.5 },
-        { name: "Saturn", color: 0xddeebb, radius: 9.5, orbitR: 35, speed: 0.03, particles: PLANET_PARTICLES * 2, size: 1.2 }
-        // Uranus and Neptune are omitted for simplicity and scale, but can be added similarly
+        { name: "Sun", color: 0xffa500, orbitR: 0, speed: 0, scale: 3.5, particles: 5000, moons: [] },
+        { name: "Earth", color: 0x0077ff, orbitR: 12, speed: 1.0, scale: 0.6, particles: TOTAL_PLANET_PARTICLES, 
+            moons: [{ name: "Moon", color: 0xcccccc, orbitR: 2.5, speed: 10.0, scale: 0.2, particles: 500 }] },
+        { name: "Mars", color: 0xff3300, orbitR: 18, speed: 0.53, scale: 0.4, particles: TOTAL_PLANET_PARTICLES, 
+            moons: [{ name: "Phobos", color: 0x888888, orbitR: 1.5, speed: 15.0, scale: 0.1, particles: 100 }] },
+        { name: "Jupiter", color: 0xeebb99, orbitR: 25, speed: 0.08, scale: 2.0, particles: TOTAL_PLANET_PARTICLES * 2,
+            moons: [{ name: "Io", color: 0xffaa00, orbitR: 4, speed: 8.0, scale: 0.3, particles: 500 }] },
+        { name: "Saturn", color: 0xddeebb, orbitR: 35, speed: 0.03, scale: 1.8, particles: TOTAL_PLANET_PARTICLES * 2,
+            moons: [{ name: "Titan", color: 0xbbffbb, orbitR: 6, speed: 5.0, scale: 0.4, particles: 600 }] }
     ];
 
     // --- State ---
-    let handTension = 0.5; // 0 = closed (slow/contract), 1 = open (fast/expand)
+    let handTension = 0.0; // 0 = Solar System, 1 = Galaxy View
     let planets = [];
-    let currentStyle = 'default';
+    let galaxyMesh;
 
     // --- Three.js Setup ---
     const container = document.getElementById('canvas-container');
     const scene = new THREE.Scene();
-    scene.fog = new THREE.FogExp2(0x000000, 0.015);
+    scene.fog = new THREE.FogExp2(0x000000, 0.005); // Deeper fog for better depth
 
-    const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
-    camera.position.set(0, 30, 60);
+    const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 5000);
+    camera.position.set(0, 50, 80);
     camera.lookAt(0, 0, 0);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -117,19 +132,296 @@
     renderer.setPixelRatio(window.devicePixelRatio);
     container.appendChild(renderer.domElement);
 
-    // Light for atmosphere
-    const ambientLight = new THREE.AmbientLight(0x404040, 5); // soft white light
-    scene.add(ambientLight);
+    // --- Custom Shader Material ---
+    const particleUniforms = {
+        size: { value: BASE_PARTICLE_SIZE },
+        scale: { value: window.innerHeight / 2 },
+        color: { value: new THREE.Color(0xffffff) },
+        time: { value: 0.0 }
+    };
 
-    // --- Particle Generators ---
+    const particleMaterial = new THREE.ShaderMaterial({
+        uniforms: particleUniforms,
+        vertexShader: document.getElementById('vertexshader').textContent,
+        fragmentShader: document.getElementById('fragmentshader').textContent,
+        blending: THREE.AdditiveBlending,
+        depthTest: false,
+        transparent: true
+    });
 
-    // Generates a spherical particle cloud
-    function generateSphereParticles(count, radius, color, style) {
+    // --- Core Functions ---
+
+    // 1. Particle Cloud Generator (Sphere/Volume)
+    function generateParticleCloud(count, radius, colorHex) {
         const geometry = new THREE.BufferGeometry();
         const positions = new Float32Array(count * 3);
         const colors = new Float32Array(count * 3);
-        const centerColor = new THREE.Color(color);
+        const color = new THREE.Color(colorHex);
 
+        for (let i = 0; i < count; i++) {
+            const i3 = i * 3;
+            
+            // Random point in a sphere
+            const r = Math.cbrt(Math.random()) * radius;
+            const theta = Math.random() * Math.PI * 2;
+            const phi = Math.acos(2 * Math.random() - 1);
+
+            positions[i3] = r * Math.sin(phi) * Math.cos(theta);
+            positions[i3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+            positions[i3 + 2] = r * Math.cos(phi);
+            
+            // Assign color
+            colors[i3] = color.r;
+            colors[i3 + 1] = color.g;
+            colors[i3 + 2] = color.b;
+        }
+
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geometry.setAttribute('customColor', new THREE.BufferAttribute(colors, 3));
+
+        const mesh = new THREE.Points(geometry, particleMaterial.clone());
+        mesh.material.uniforms.color.value.set(colorHex);
+        return mesh;
+    }
+
+    // 2. Galaxy Generator (Spiral Arms)
+    function createGalaxy() {
+        const count = GALAXY_PARTICLES;
+        const geometry = new THREE.BufferGeometry();
+        const positions = new Float32Array(count * 3);
+        const colors = new Float32Array(count * 3);
+        
+        const galaxyRadius = 2000;
+        
+        for (let i = 0; i < count; i++) {
+            const i3 = i * 3;
+            
+            // Spiral Arm Logic
+            const arm = Math.floor(Math.random() * 4); // 4 arms
+            const angle = Math.random() * Math.PI * 2;
+            let r = Math.pow(Math.random(), 2) * galaxyRadius;
+            
+            const spiralAngle = angle + (r / galaxyRadius) * 6 * Math.PI + arm * Math.PI / 2;
+            
+            // Add some thickness/blur
+            r += (Math.random() - 0.5) * 50; 
+            
+            positions[i3] = Math.cos(spiralAngle) * r;
+            positions[i3 + 1] = (Math.random() - 0.5) * 100; // Vertical spread
+            positions[i3 + 2] = Math.sin(spiralAngle) * r;
+            
+            // Color variations (blue/white/pink nebula)
+            const color = new THREE.Color();
+            if (Math.random() > 0.8) color.set(0xff00ff); // Pink
+            else if (Math.random() > 0.5) color.set(0x00ffff); // Cyan
+            else color.set(0xffffff); // White
+            
+            colors[i3] = color.r;
+            colors[i3 + 1] = color.g;
+            colors[i3 + 2] = color.b;
+        }
+
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geometry.setAttribute('customColor', new THREE.BufferAttribute(colors, 3));
+        
+        const galaxyMaterial = particleMaterial.clone();
+        galaxyMaterial.uniforms.size.value = 15.0; // Larger points for background
+        
+        galaxyMesh = new THREE.Points(geometry, galaxyMaterial);
+        scene.add(galaxyMesh);
+    }
+    
+    // 3. Solar System Initialization
+    function createSolarSystem() {
+        planets = [];
+        PLANET_DATA.forEach(data => {
+            // Main Planet Mesh
+            const planetMesh = generateParticleCloud(
+                data.particles, 
+                data.scale, 
+                data.color
+            );
+            
+            // Create a Group to hold the planet and its moons
+            const systemGroup = new THREE.Group();
+            systemGroup.add(planetMesh); // Planet is at the center of its group
+            
+            const planetObject = {
+                name: data.name,
+                mesh: systemGroup, // Use group as the main mesh for orbiting
+                core: planetMesh,
+                orbitRadius: data.orbitR,
+                orbitalSpeed: data.speed,
+                rotationSpeed: data.speed * 5,
+                startTime: Math.random() * 2 * Math.PI, 
+                moons: []
+            };
+
+            // Moons
+            data.moons.forEach(moonData => {
+                const moonMesh = generateParticleCloud(
+                    moonData.particles, 
+                    moonData.scale, 
+                    moonData.color
+                );
+                
+                // Add moon to the planet's systemGroup, not the scene directly
+                systemGroup.add(moonMesh); 
+                
+                planetObject.moons.push({
+                    mesh: moonMesh,
+                    orbitRadius: moonData.orbitR,
+                    orbitalSpeed: moonData.speed,
+                    startTime: Math.random() * 2 * Math.PI,
+                });
+            });
+            
+            scene.add(systemGroup);
+            planets.push(planetObject);
+        });
+    }
+
+    createSolarSystem();
+    createGalaxy();
+
+    // --- Hand Tracking Logic (MediaPipe) ---
+    const videoElement = document.getElementById('input-video');
+    const hands = new Hands({locateFile: (file) => {
+        return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+    }});
+
+    hands.setOptions({
+        maxNumHands: 1, 
+        modelComplexity: 1,
+        minDetectionConfidence: 0.7,
+        minTrackingConfidence: 0.5
+    });
+
+    hands.onResults(onResults);
+
+    function onResults(results) {
+        const handStatus = document.getElementById('hand-status');
+        const dot = document.querySelector('.dot');
+        const controlBar = document.getElementById('hand-control-bar');
+
+        if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+            document.getElementById('loading').style.display = 'none';
+            handStatus.innerText = "Hand Detected";
+            dot.style.background = "#00ffff";
+
+            const landmarks = results.multiHandLandmarks[0];
+            
+            // Distance between Thumb Tip (4) and Pinky Tip (20)
+            const thumbTip = landmarks[4];
+            const pinkyTip = landmarks[20];
+            
+            const d = Math.hypot(thumbTip.x - pinkyTip.x, thumbTip.y - pinkyTip.y, thumbTip.z - pinkyTip.z);
+            
+            // Map distance to openness (0 to 1)
+            let openness = (d - 0.05) / (0.4 - 0.05); 
+            openness = Math.max(0, Math.min(1, openness)); 
+            
+            handTension = THREE.MathUtils.lerp(handTension, openness, 0.1);
+
+        } else {
+            handStatus.innerText = "Show hand to control";
+            dot.style.background = "#ff4444";
+            // Slowly revert to neutral view (Solar System)
+            handTension = THREE.MathUtils.lerp(handTension, 0.0, 0.05);
+        }
+        
+        controlBar.style.width = `${handTension * 100}%`;
+    }
+
+    // Camera Setup
+    const cam = new Camera(videoElement, {
+        onFrame: async () => {
+            await hands.send({image: videoElement});
+        },
+        width: 640,
+        height: 480
+    });
+    cam.start();
+
+    // --- Animation Loop ---
+    const clock = new THREE.Clock();
+
+    function animate() {
+        requestAnimationFrame(animate);
+
+        const time = clock.getElapsedTime();
+        
+        // 1. Hand Control Mapping: HYBRID ZOOM/SPEED
+        
+        // Hand Tension (0) -> Solar System View (Near, Slow)
+        // Hand Tension (1) -> Galaxy View (Far, Fast)
+        
+        const orbitSpeedMultiplier = THREE.MathUtils.lerp(0.1, 5.0, handTension);
+        const cameraDistance = THREE.MathUtils.lerp(70, 4000, handTension);
+        const systemScale = THREE.MathUtils.lerp(1.0, 50.0, handTension * handTension); // Exponential scale up for big jump
+
+        // Update UI Mode
+        document.getElementById('mode-display').innerText = handTension < 0.5 ? 
+            "Solar System (Contracted)" : "Galaxy View (Expanded)";
+
+
+        // 2. Animate Planets (Solar System)
+        planets.forEach(planet => {
+            const group = planet.mesh;
+            
+            // Orbit Calculation
+            const angle = planet.startTime + time * planet.orbitalSpeed * orbitSpeedMultiplier;
+            const radius = planet.orbitRadius * systemScale; 
+            
+            group.position.x = Math.cos(angle) * radius;
+            group.position.z = Math.sin(angle) * radius;
+            
+            // Self Rotation
+            planet.core.rotation.y += planet.rotationSpeed * 0.005 * orbitSpeedMultiplier;
+            
+            // Animate Moons (Relative to Planet)
+            planet.moons.forEach(moon => {
+                const moonAngle = moon.startTime + time * moon.orbitalSpeed * orbitSpeedMultiplier;
+                // Moons use small, fixed orbit radius (not scaled by systemScale)
+                moon.mesh.position.x = Math.cos(moonAngle) * moon.orbitRadius;
+                moon.mesh.position.z = Math.sin(moonAngle) * moon.orbitRadius;
+            });
+        });
+
+        // 3. Galaxy Movement
+        if (galaxyMesh) {
+            // Galaxy rotates slightly in the background
+            galaxyMesh.rotation.y = time * 0.01; 
+            // Visibility: Galaxy should be faint when zoomed in (handTension < 0.5)
+            galaxyMesh.material.opacity = THREE.MathUtils.lerp(0.05, 1.0, handTension);
+        }
+
+        // 4. Camera Control
+        camera.position.x = Math.sin(time * 0.01) * cameraDistance * 0.05;
+        camera.position.z = Math.cos(time * 0.01) * cameraDistance * 0.05;
+        
+        // Adjust Camera Z-distance
+        camera.position.y = THREE.MathUtils.lerp(20, cameraDistance / 4, handTension);
+        
+        // Smoothly move camera away from center
+        camera.position.setLength(cameraDistance); 
+        camera.lookAt(0, 0, 0);
+
+        renderer.render(scene, camera);
+    }
+
+    animate();
+
+    // Handle Resize
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+</script>
+</body>
+</html>
         for (let i = 0; i < count; i++) {
             const i3 = i * 3;
             
